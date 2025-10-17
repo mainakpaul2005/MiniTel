@@ -2,7 +2,7 @@
 A mini telephone directory app, a project for my academics using only C and modules.
 
 
-#Basic System Architechture
+Basic System Architechture
 ┌──────────────────────────┐
 │        UI Layer          │ ← handles menus, colors, inputs
 ├──────────────────────────┤
