@@ -1,0 +1,46 @@
+# Build artifacts
+/build/
+*.o
+*.obj
+*.exe
+*.out
+*.dll
+*.so
+*.dylib
+
+# Dependency directories
+/deps/
+
+# Editor and IDE files
+.vscode/
+*.code-workspace
+*.suo
+*.user
+*.userosscache
+*.sln
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Logs and temporary files
+*.log
+*.tmp
+~*
+
+# Backup files
+*~
+*.bak
+
+# Ctags
+.tags
+
+# CSV snapshots (if generated)
+contacts_snapshot.csv
+
+# Ignore compiled binaries in repo root
+/main
