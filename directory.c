@@ -6,27 +6,29 @@
 #include "contact.h"
 #include "hashmap.h"
 
-#define MAX_CONTACTS 10000
 Contact contacts[MAX_CONTACTS];
 int contactCount = 0;
 
 // Helper function to create backup of snapshot file
 void createBackup() {
-    char command[100];
+    char command[256];
     time_t now = time(NULL);
     struct tm *t = localtime(&now);
     char backup_name[50];
     
-    sprintf(backup_name, "contacts_backup_%04d%02d%02d.csv",
-            t->tm_year + 1900, t->tm_mon + 1, t->tm_mday);
+    snprintf(backup_name, sizeof(backup_name), "contacts_backup_%04d%02d%02d.csv",
+        t->tm_year + 1900, t->tm_mon + 1, t->tm_mday);
     
 #ifdef _WIN32
-    sprintf(command, "copy contacts_snapshot.csv %s >nul 2>&1", backup_name);
+    snprintf(command, sizeof(command), "copy contacts_snapshot.csv %s >nul 2>&1", backup_name);
 #else
-    sprintf(command, "cp contacts_snapshot.csv %s 2>/dev/null", backup_name);
+    snprintf(command, sizeof(command), "cp contacts_snapshot.csv %s 2>/dev/null", backup_name);
 #endif
     
-    system(command);
+    int rc = system(command);
+    if (rc == -1) {
+        fprintf(stderr, "[WARN] Could not execute backup command: %s\n", command);
+    }
 }
 
 void loadContacts() {
@@ -54,7 +56,9 @@ void loadContacts() {
         }
     }
     
-    fclose(file);
+    if (fclose(file) != 0) {
+        fprintf(stderr, "[WARN] Failed to close contacts file properly\n");
+    }
     printf("\033[1;32m✔ Loaded %d contacts successfully.\033[0m\n", contactCount);
 }
 
@@ -68,10 +72,12 @@ void appendLog(Contact c) {
     time_t now = time(NULL);
     struct tm *t = localtime(&now);
     
-    fprintf(log, "%d,%s,%s,%s,%d,%ld,%04d-%02d-%02d %02d:%02d:%02d\n",
+    if (fprintf(log, "%d,%s,%s,%s,%d,%ld,%04d-%02d-%02d %02d:%02d:%02d\n",
             c.id, c.name, c.phone, c.email, c.isDeleted, c.deletedAt,
             t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
-            t->tm_hour, t->tm_min, t->tm_sec);
+            t->tm_hour, t->tm_min, t->tm_sec) < 0) {
+        fprintf(stderr, "[WARN] Failed to write to contacts_log.csv\n");
+    }
             
     fclose(log);
     

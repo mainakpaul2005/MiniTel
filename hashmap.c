@@ -25,7 +25,10 @@ unsigned int hash(const char* key) {
 void insertHash(const char* key, int index) {
     unsigned int h = hash(key);
     HashNode* newNode = (HashNode*)malloc(sizeof(HashNode));
-    if (!newNode) return;
+    if (!newNode) {
+        fprintf(stderr, "[WARN] insertHash: malloc failed for key '%s'\n", key);
+        return;
+    }
 
     strcpy(newNode->key, key);
     newNode->index = index;
