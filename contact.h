@@ -3,6 +3,8 @@
 
 #include <time.h>
 
+// Maximum number of contacts supported by the application
+#define MAX_CONTACTS 10000
 
 typedef struct {
     int id;
@@ -13,9 +15,9 @@ typedef struct {
     time_t deletedAt;
 } Contact;
 
-#endif
-
 // Shared globals and helpers (defined in directory.c)
-extern Contact contacts[];
+extern Contact contacts[MAX_CONTACTS];
 extern int contactCount;
 void appendLog(Contact c);
+
+#endif // CONTACT_H
