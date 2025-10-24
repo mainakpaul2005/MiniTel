@@ -15,15 +15,15 @@ Build (Windows PowerShell)
 
 If you have GCC (MinGW) installed, run:
 
-```powershell
-gcc -o MiniTel.exe main.c
-```
+powershell
+    gcc -o MiniTel.exe main.c
+
 
 Run
 
-```powershell
-.\\MiniTel.exe
-```
+powershell
+    .\MiniTel.exe
+
 
 Usage
 - Choose 1 to add a contact. The program will append to `contacts.csv`.
