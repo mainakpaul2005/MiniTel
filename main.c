@@ -1,432 +1,245 @@
 // Simple telephone directory using CSV storage
-// Single-file program: main.c
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdint.h>
 
 #define CSV_FILE "contacts.csv"
-#define LINE_BUF 1024
-#define HASH_SIZE 256  // Must be power of 2
-#define HASH_MASK (HASH_SIZE - 1)
+#define MAX_LINE 1024
 
-typedef struct Contact {
+typedef struct {
     int id;
     char name[128];
     char phone[64];
     char email[128];
     char address[256];
-    struct Contact *next;  // for hash chain
 } Contact;
 
 typedef struct {
-    Contact **contacts;    // dynamic array of Contact pointers
-    size_t size;          // number of contacts in array
-    size_t capacity;      // allocated capacity
-    Contact *buckets[HASH_SIZE];  // hash table buckets
+    Contact *list;
+    int count;
+    int capacity;
 } Directory;
 
-// Hash function for contact IDs (simple multiplicative hash)
-static inline uint32_t hash_int(int key) {
-    return (uint32_t)key * 2654435761u;  // Knuth's multiplicative hash
+Directory* dir_create(void) {
+    Directory *d = malloc(sizeof(Directory));
+    d->capacity = 8;
+    d->list = malloc(d->capacity * sizeof(Contact));
+    d->count = 0;
+    return d;
 }
 
-// Get bucket index for a key
-static inline size_t bucket_idx(int key) {
-    return hash_int(key) & HASH_MASK;
-}
-
-// Create new directory with both array and hash table
-Directory *dir_create(void) {
-    Directory *dir = calloc(1, sizeof(Directory));
-    if (!dir) return NULL;
-    dir->capacity = 8;  // initial capacity
-    dir->contacts = malloc(dir->capacity * sizeof(Contact*));
-    if (!dir->contacts) { free(dir); return NULL; }
-    return dir;
-}
-
-// Ensure array has space for one more contact
-static int ensure_capacity(Directory *dir) {
-    if (dir->size >= dir->capacity) {
-        size_t new_cap = dir->capacity * 2;
-        Contact **new_arr = realloc(dir->contacts, new_cap * sizeof(Contact*));
-        if (!new_arr) return 0;
-        dir->contacts = new_arr;
-        dir->capacity = new_cap;
+void dir_add(Directory *d, Contact c) {
+    if (d->count >= d->capacity) {
+        d->capacity *= 2;
+        d->list = realloc(d->list, d->capacity * sizeof(Contact));
     }
-    return 1;
+    d->list[d->count++] = c;
 }
 
-// Insert contact into directory (takes ownership of contact)
-int dir_insert(Directory *dir, Contact *c) {
-    // First add to hash table
-    size_t idx = bucket_idx(c->id);
-    c->next = dir->buckets[idx];
-    dir->buckets[idx] = c;
-    
-    // Then add to array
-    if (!ensure_capacity(dir)) {
-        // Roll back hash table insert
-        dir->buckets[idx] = c->next;
-        return 0;
-    }
-    dir->contacts[dir->size++] = c;
-    return 1;
-}
-
-// Find contact by ID (O(1) using hash table)
-Contact *dir_find(Directory *dir, int id) {
-    size_t idx = bucket_idx(id);
-    for (Contact *c = dir->buckets[idx]; c; c = c->next) {
-        if (c->id == id) return c;
-    }
+Contact* dir_find(Directory *d, int id) {
+    for (int i = 0; i < d->count; i++)
+        if (d->list[i].id == id) return &d->list[i];
     return NULL;
 }
 
-// Helper: remove contact from array at given index
-static void remove_from_array(Directory *dir, size_t arr_idx) {
-    memmove(&dir->contacts[arr_idx], 
-            &dir->contacts[arr_idx + 1], 
-            (dir->size - arr_idx - 1) * sizeof(Contact*));
-    dir->size--;
-}
-
-// Remove contact by ID (returns removed contact if found)
-Contact *dir_remove(Directory *dir, int id) {
-    // First remove from hash table
-    size_t idx = bucket_idx(id);
-    Contact *prev = NULL;
-    for (Contact *c = dir->buckets[idx]; c; prev = c, c = c->next) {
-        if (c->id == id) {
-            // Remove from hash chain
-            if (prev) prev->next = c->next;
-            else dir->buckets[idx] = c->next;
-            c->next = NULL;
-            
-            // Remove from array
-            for (size_t i = 0; i < dir->size; i++) {
-                if (dir->contacts[i] == c) {
-                    remove_from_array(dir, i);
-                    break;
-                }
-            }
-            return c;
+void dir_delete(Directory *d, int id) {
+    for (int i = 0; i < d->count; i++) {
+        if (d->list[i].id == id) {
+            memmove(&d->list[i], &d->list[i+1], (d->count-i-1) * sizeof(Contact));
+            d->count--;
+            return;
         }
     }
-    return NULL;
 }
 
-// Free directory and all contacts
-void dir_free(Directory *dir) {
-    if (!dir) return;
-    // Free all contacts (only once, from array)
-    for (size_t i = 0; i < dir->size; i++) {
-        free(dir->contacts[i]);
-    }
-    free(dir->contacts);
-    free(dir);
+void dir_free(Directory *d) {
+    free(d->list);
+    free(d);
 }
 
-// Helper: create new contact struct
-static Contact *contact_new(void) {
-    return calloc(1, sizeof(Contact));
-}
-
-// Load contacts into directory (both array and hash table)
-Directory *load_contacts(void) {
+Directory* load_contacts(void) {
+    Directory *d = dir_create();
     FILE *f = fopen(CSV_FILE, "r");
-    Directory *dir = dir_create();
-    if (!f) {
-        return dir;
-    }
+    if (!f) return d;
     
-    char line[LINE_BUF];
-    // skip header if present
-    if (!fgets(line, sizeof(line), f)) { fclose(f); return dir; }
-    // check if header starts with id or digit
-    if (strncmp(line, "id,", 3) != 0 && !(line[0] >= '0' && line[0] <= '9')) {
-        // assume header present, read next
-    } else {
-        // the first line might be data; if it begins with digit treat as data
-        if (line[0] >= '0' && line[0] <= '9') {
-            // process first line as data by rewinding
-            fseek(f, 0, SEEK_SET);
-        }
-    }
-    while (fgets(line, sizeof(line), f)) {
-        // trim newline
-        char *nl = strchr(line, '\n'); if (nl) *nl = '\0';
-        Contact *c = contact_new();
-        // parse CSV line supporting quoted fields
-        char *p = line;
-        char *fields[5] = {0};
-        int fi = 0;
-        while (*p && fi < 5) {
-            if (*p == '"') {
-                // quoted field
-                p++; // skip opening quote
-                char *bufout = malloc(strlen(p) + 1);
-                char *o = bufout;
-                while (*p) {
-                    if (*p == '"') {
-                        if (p[1] == '"') { // escaped quote
-                            *o++ = '"'; p += 2; continue;
-                        } else { p++; break; }
-                    }
-                    *o++ = *p++;
-                }
-                *o = '\0';
-                fields[fi++] = bufout;
-                if (*p == ',') p++;
-            } else {
-                // unquoted field
-                char *start = p;
-                while (*p && *p != ',') p++;
-                int len = p - start;
-                char *bufout = malloc(len + 1);
-                strncpy(bufout, start, len);
-                bufout[len] = '\0';
-                fields[fi++] = bufout;
-                if (*p == ',') p++;
-            }
-        }
-        if (fi >= 1 && fields[0]) c->id = atoi(fields[0]);
-        if (fi >= 2 && fields[1]) strncpy(c->name, fields[1], sizeof(c->name)-1);
-        if (fi >= 3 && fields[2]) strncpy(c->phone, fields[2], sizeof(c->phone)-1);
-        if (fi >= 4 && fields[3]) strncpy(c->email, fields[3], sizeof(c->email)-1);
-        if (fi >= 5 && fields[4]) strncpy(c->address, fields[4], sizeof(c->address)-1);
-        for (int k = 0; k < fi; ++k) free(fields[k]);
-
-    dir_insert(dir, c);
+    char line[MAX_LINE];
+    if (fgets(line, MAX_LINE, f)) {} // skip header
+    
+    while (fgets(line, MAX_LINE, f)) {
+        Contact c = {0};
+        sscanf(line, "%d,%127[^,],%63[^,],%127[^,],%255[^\n]", 
+               &c.id, c.name, c.phone, c.email, c.address);
+        dir_add(d, c);
     }
     fclose(f);
-    return dir;
+    return d;
 }
 
-int next_id(Directory *dir) {
-    int mx = 0;
-    for (size_t i = 0; i < dir->size; i++) {
-        if (dir->contacts[i]->id > mx) mx = dir->contacts[i]->id;
-    }
-    return mx + 1;
+int next_id(Directory *d) {
+    int max = 0;
+    for (int i = 0; i < d->count; i++)
+        if (d->list[i].id > max) max = d->list[i].id;
+    return max + 1;
 }
 
-void save_all(Directory *dir) {
+void save_all(Directory *d) {
     FILE *f = fopen(CSV_FILE, "w");
-    if (!f) { perror("fopen"); return; }
+    if (!f) return;
     fprintf(f, "id,name,phone,email,address\n");
-    // Write from array to maintain order
-    for (size_t i = 0; i < dir->size; i++) {
-        Contact *c = dir->contacts[i];
-        // write id then 4 fields with CSV escaping
-        fprintf(f, "%d,", c->id);
-            char *fields[4] = { (char*)c->name, (char*)c->phone, (char*)c->email, (char*)c->address };
-        for (int j = 0; j < 4; ++j) {
-            char *s = fields[j];
-            int need_quote = 0;
-            for (char *t = s; *t; ++t) if (*t == ',' || *t == '"' || *t == '\n') { need_quote = 1; break; }
-            if (!need_quote) {
-                fprintf(f, "%s", s);
-            } else {
-                fputc('"', f);
-                for (char *t = s; *t; ++t) {
-                    if (*t == '"') fputc('"', f);
-                    fputc(*t, f);
-                }
-                fputc('"', f);
-            }
-            if (j < 3) fputc(',', f);
-        }
-        fputc('\n', f);
+    for (int i = 0; i < d->count; i++) {
+        Contact *c = &d->list[i];
+        fprintf(f, "%d,%s,%s,%s,%s\n", c->id, c->name, c->phone, c->email, c->address);
     }
     fclose(f);
 }
 
 void add_contact(void) {
-    Directory *dir = load_contacts();
-    Contact *c = contact_new();
-    char buf[512];
+    Directory *d = load_contacts();
+    Contact c = {0};
     
-    printf("\n  Add New Contact");
-    printf("\n  --------------\n");
-    printf("  Name:    "); if (!fgets(buf, sizeof(buf), stdin)) { free(c); dir_free(dir); return; } 
-    buf[strcspn(buf, "\n")] = '\0'; strncpy(c->name, buf, sizeof(c->name)-1);
-    printf("  Phone:   "); if (!fgets(buf, sizeof(buf), stdin)) { free(c); dir_free(dir); return; }
-    buf[strcspn(buf, "\n")] = '\0'; strncpy(c->phone, buf, sizeof(c->phone)-1);
-    printf("  Email:   "); if (!fgets(buf, sizeof(buf), stdin)) { free(c); dir_free(dir); return; }
-    buf[strcspn(buf, "\n")] = '\0'; strncpy(c->email, buf, sizeof(c->email)-1);
-    printf("  Address: "); if (!fgets(buf, sizeof(buf), stdin)) { free(c); dir_free(dir); return; }
-    buf[strcspn(buf, "\n")] = '\0'; strncpy(c->address, buf, sizeof(c->address)-1);
-
-    c->id = next_id(dir);
-    if (!dir_insert(dir, c)) {
-        printf("Error: Failed to add contact\n");
-        free(c);
-        dir_free(dir);
-        return;
-    }
-    save_all(dir);
-    int saved_id = c->id;
-    dir_free(dir);
-    printf("Contact added with id %d.\n", saved_id);
+    printf("\n  -----------------------------------------------------------\n");
+    printf("                     ADD NEW CONTACT                         \n");
+    printf("  -----------------------------------------------------------\n\n");
+    printf("  Name    : "); scanf(" %127[^\n]", c.name);
+    printf("  Phone   : "); scanf(" %63[^\n]", c.phone);
+    printf("  Email   : "); scanf(" %127[^\n]", c.email);
+    printf("  Address : "); scanf(" %255[^\n]", c.address);
+    
+    c.id = next_id(d);
+    dir_add(d, c);
+    save_all(d);
+    printf("\n  >> Contact added successfully (ID: %d)\n\n", c.id);
+    dir_free(d);
 }
 
 void list_contacts(void) {
-    Directory *dir = load_contacts();
-    if (dir->size == 0) { 
-        printf("\n  No contacts found in directory.\n\n"); 
-        dir_free(dir); 
+    Directory *d = load_contacts();
+    if (d->count == 0) { 
+        printf("\n  No contacts found.\n\n"); 
+        dir_free(d); 
         return; 
     }
-    printf("\n  Contact List");
-    printf("\n  ------------\n\n");
-    // Print from array to maintain order
-    for (size_t i = 0; i < dir->size; i++) {
-        Contact *c = dir->contacts[i];
-        printf("  Contact #%d\n", c->id);
-        printf("  - Name:    %s\n", c->name);
-        printf("  - Phone:   %s\n", c->phone);
-        printf("  - Email:   %s\n", c->email);
-        printf("  - Address: %s\n", c->address);
-        printf("  -----------------------------------\n");
+    printf("\n  -----------------------------------------------------------\n");
+    printf("                       CONTACT LIST                          \n");
+    printf("  -----------------------------------------------------------\n\n");
+    for (int i = 0; i < d->count; i++) {
+        Contact *c = &d->list[i];
+        printf("  --- Contact #%d --------------------------------------------\n", c->id);
+        printf("  Name    : %s\n", c->name);
+        printf("  Phone   : %s\n", c->phone);
+        printf("  Email   : %s\n", c->email);
+        printf("  Address : %s\n", c->address);
+        printf("  -----------------------------------------------------------\n\n");
     }
-    printf("\n  Total Contacts: %zu\n\n", dir->size);
-    dir_free(dir);
+    printf("  Total Contacts: %d\n\n", d->count);
+    dir_free(d);
 }
 
 void search_contacts(void) {
-    printf("\n  Search Contacts");
-    printf("\n  --------------\n");
+    char q[256];
+    printf("\n  -----------------------------------------------------------\n");
+    printf("                     SEARCH CONTACTS                         \n");
+    printf("  -----------------------------------------------------------\n\n");
     printf("  Enter name or phone: ");
-    char q[256]; if (!fgets(q, sizeof(q), stdin)) return; q[strcspn(q, "\n")] = '\0';
-    if (strlen(q) == 0) { printf("\n  Error: Search query cannot be empty.\n\n"); return; }
+    scanf(" %255[^\n]", q);
     
-    Directory *dir = load_contacts();
-    if (dir->size == 0) { printf("\n  No contacts in directory.\n\n"); dir_free(dir); return; }
-    
-    printf("\n  Search Results for '%s'\n", q);
-    printf("  -----------------------------------\n\n");
+    Directory *d = load_contacts();
+    printf("\n  Search results for: '%s'\n\n", q);
     
     int found = 0;
-    for (size_t i = 0; i < dir->size; i++) {
-        Contact *c = dir->contacts[i];
+    for (int i = 0; i < d->count; i++) {
+        Contact *c = &d->list[i];
         if (strstr(c->name, q) || strstr(c->phone, q)) {
-            printf("  Contact #%d\n", c->id);
-            printf("  - Name:    %s\n", c->name);
-            printf("  - Phone:   %s\n", c->phone);
-            printf("  - Email:   %s\n", c->email);
-            printf("  - Address: %s\n", c->address);
-            printf("  -----------------------------------\n");
+            printf("  [%d] %-30s  %-15s\n", c->id, c->name, c->phone);
             found = 1;
         }
     }
-    if (!found) printf("  No matches found.\n");
+    if (!found) printf("  >> No matches found.\n");
     printf("\n");
-    dir_free(dir);
+    dir_free(d);
 }
 
 void delete_contact(void) {
-    printf("\n  Delete Contact");
-    printf("\n  --------------\n");
-    printf("  Enter contact ID to delete: ");
-    char buf[64]; if (!fgets(buf, sizeof(buf), stdin)) return; int id = atoi(buf);
-    if (id <= 0) { printf("\n  Error: Invalid contact ID.\n\n"); return; }
+    int id;
+    printf("\n  -----------------------------------------------------------\n");
+    printf("                     DELETE CONTACT                          \n");
+    printf("  -----------------------------------------------------------\n\n");
+    printf("  Enter Contact ID: ");
+    scanf("%d", &id);
     
-    Directory *dir = load_contacts();
-    if (dir->size == 0) { printf("\n  No contacts in directory.\n\n"); dir_free(dir); return; }
-    
-    Contact *found = dir_remove(dir, id);
-    if (!found) { 
-        printf("\n  Error: Contact #%d not found.\n\n", id); 
-        dir_free(dir); 
+    Directory *d = load_contacts();
+    Contact *c = dir_find(d, id);
+    if (!c) { 
+        printf("\n  >> Contact #%d not found.\n\n", id); 
+        dir_free(d); 
         return; 
     }
-    save_all(dir);
-    free(found);
-    dir_free(dir);
-    printf("\n  Success: Contact #%d has been deleted.\n\n", id);
-}
-
-// Helper to prompt with default: if user enters empty line, keep default
-static void prompt_with_default(const char *label, char *out, size_t outsz, const char *def) {
-    char buf[512];
-    if (def && strlen(def) > 0) printf("%s [%s]: ", label, def); else printf("%s: ", label);
-    if (!fgets(buf, sizeof(buf), stdin)) return;
-    buf[strcspn(buf, "\n")] = '\0';
-    if (strlen(buf) == 0) {
-        if (def) strncpy(out, def, outsz-1);
-    } else {
-        strncpy(out, buf, outsz-1);
-    }
+    dir_delete(d, id);
+    save_all(d);
+    dir_free(d);
+    printf("\n  >> Contact #%d deleted successfully.\n\n", id);
 }
 
 void update_contact(void) {
-    printf("\n  Update Contact");
-    printf("\n  --------------\n");
-    printf("  Enter contact ID to update: ");
-    char buf[64]; if (!fgets(buf, sizeof(buf), stdin)) return; int id = atoi(buf);
-    if (id <= 0) { printf("\n  Error: Invalid contact ID.\n\n"); return; }
+    char buf[512];
+    int id;
+    printf("\n  -----------------------------------------------------------\n");
+    printf("                     UPDATE CONTACT                          \n");
+    printf("  -----------------------------------------------------------\n\n");
+    printf("  Enter Contact ID: ");
+    scanf("%d", &id);
     
-    Directory *dir = load_contacts();
-    if (dir->size == 0) { printf("\n  No contacts in directory.\n\n"); dir_free(dir); return; }
+    Directory *d = load_contacts();
+    Contact *c = dir_find(d, id);
+    if (!c) { 
+        printf("\n  >> Contact #%d not found.\n\n", id); 
+        dir_free(d); 
+        return; 
+    }
     
-    Contact *found = dir_find(dir, id);
-    if (!found) { printf("\n  Error: Contact #%d not found.\n\n", id); dir_free(dir); return; }
+    printf("\n  Editing Contact #%d\n", id);
+    printf("  -----------------------------------------------------------\n");
+    printf("  Name    [%s]: ", c->name);
+    scanf(" %511[^\n]", buf);
+    if (strlen(buf) > 0) strcpy(c->name, buf);
     
-    printf("\n  Editing Contact #%d", id);
-    printf("\n  Press Enter to keep current values\n\n");
+    printf("  Phone   [%s]: ", c->phone);
+    scanf(" %511[^\n]", buf);
+    if (strlen(buf) > 0) strcpy(c->phone, buf);
     
-    printf("  Current name:    %s\n", found->name);
-    printf("  New name:      "); 
-    prompt_with_default("", found->name, sizeof(found->name), found->name);
+    printf("  Email   [%s]: ", c->email);
+    scanf(" %511[^\n]", buf);
+    if (strlen(buf) > 0) strcpy(c->email, buf);
     
-    printf("\n  Current phone:   %s\n", found->phone);
-    printf("  New phone:     ");
-    prompt_with_default("", found->phone, sizeof(found->phone), found->phone);
+    printf("  Address [%s]: ", c->address);
+    scanf(" %511[^\n]", buf);
+    if (strlen(buf) > 0) strcpy(c->address, buf);
     
-    printf("\n  Current email:   %s\n", found->email);
-    printf("  New email:     ");
-    prompt_with_default("", found->email, sizeof(found->email), found->email);
-    
-    printf("\n  Current address: %s\n", found->address);
-    printf("  New address:   ");
-    prompt_with_default("", found->address, sizeof(found->address), found->address);
-    
-    save_all(dir);
-    dir_free(dir);
-    printf("\n  Success: Contact #%d has been updated.\n\n", id);
-}
-
-void print_menu(void) {
-    printf("\n  MiniTel Directory Manager");
-    printf("\n  ----------------------\n");
-    printf("  1. Add New Contact\n");
-    printf("  2. View All Contacts\n");
-    printf("  3. Search Contacts\n");
-    printf("  4. Delete Contact\n");
-    printf("  5. Update Contact\n");
-    printf("  0. Exit Application\n");
-    printf("  ----------------------\n");
-    printf("  Select option: ");
+    save_all(d);
+    dir_free(d);
+    printf("\n  >> Contact #%d updated successfully.\n\n", id);
 }
 
 int main(void) {
-    char choice[16];
-    for (;;) {
-        print_menu();
-        if (!fgets(choice, sizeof(choice), stdin)) break;
-        int c = atoi(choice);
-        switch (c) {
-            case 1: add_contact(); break;
-            case 2: list_contacts(); break;
-            case 3: search_contacts(); break;
-            case 4: delete_contact(); break;
-            case 5: update_contact(); break;
-            case 0: printf("Goodbye.\n"); return 0;
-            default: printf("Invalid option\n");
+    int c;
+    while (1) {
+        printf("\n  -----------------------------------------------------------\n");
+        printf("                 MINITEL DIRECTORY MANAGER                   \n");
+        printf("  -----------------------------------------------------------\n");
+        printf("\n  [1] Add Contact      [2] List All       [3] Search\n");
+        printf("  [4] Delete Contact   [5] Update         [0] Exit\n");
+        printf("\n  Enter your choice: ");
+        scanf("%d", &c);
+        
+        if (c == 1) add_contact();
+        else if (c == 2) list_contacts();
+        else if (c == 3) search_contacts();
+        else if (c == 4) delete_contact();
+        else if (c == 5) update_contact();
+        else if (c == 0) { 
+            printf("\n  Thank you for using MiniTel. Goodbye!\n\n"); 
+            return 0; 
         }
+        else printf("\n  >> Invalid choice. Please try again.\n");
     }
-    return 0;
 }
