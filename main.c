@@ -208,7 +208,7 @@ void update_contact(void) {
     if (strlen(buf) > 0) strcpy(c->phone, buf);
     
     printf("  Email   [%s]: ", c->email);
-    scanf(" %511[^\n]", buf);
+    scanf(" %511[^\n]", buf);1
     if (strlen(buf) > 0) strcpy(c->email, buf);
     
     printf("  Address [%s]: ", c->address);
